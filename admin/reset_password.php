@@ -1,167 +1,136 @@
 <?php
-/**
- * Password Reset Handler
- * Handles password reset via email token
- */
-
 require_once '../config/config.php';
+require_once '../config/database.php';
 
-// Redirect if already logged in
-if (SecureSession::isLoggedIn()) {
-    redirect(ADMIN_URL . '/dashboard.php');
-}
+$database = new Database();
+$conn = $database->getConnection();
 
+$success_message = '';
+$error_message = '';
+$valid_token = false;
+$user_id = null;
+
+// Check token
 $token = $_GET['token'] ?? '';
-$message = '';
-$messageType = 'info';
-$tokenValid = false;
 
-// Validate token
 if (!empty($token)) {
-    try {
-        $db = DB::getInstance();
+    // Check if token is valid and not expired
+    $stmt = $conn->prepare("SELECT user_id FROM password_resets WHERE token = ? AND expires_at > NOW()");
+    $stmt->bind_param("s", $token);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $reset_data = $result->fetch_assoc();
+    
+    if ($reset_data) {
+        $valid_token = true;
+        $user_id = $reset_data['user_id'];
+    }
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $valid_token) {
+    // Verify CSRF token
+    if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        $error_message = 'Invalid CSRF token. Please try again.';
+    } else {
+        $new_password = $_POST['new_password'];
+        $confirm_password = $_POST['confirm_password'];
         
-        // Check if token is valid and not expired
-        $stmt = $db->prepare("
-            SELECT pr.*, u.username, u.email 
-            FROM password_resets pr
-            JOIN users u ON pr.user_id = u.id
-            WHERE pr.token = ? AND pr.expires_at > NOW() AND pr.used = 0
-        ");
-        $stmt->execute([$token]);
-        $reset = $stmt->fetch();
-        
-        if ($reset) {
-            $tokenValid = true;
+        if (strlen($new_password) < 8) {
+            $error_message = 'Password must be at least 8 characters long.';
+        } elseif ($new_password !== $confirm_password) {
+            $error_message = 'Passwords do not match.';
         } else {
-            $message = 'This password reset link is invalid or has expired. Please request a new one.';
-            $messageType = 'error';
+            // Update password
+            $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
+            
+            $conn->begin_transaction();
+            
+            try {
+                // Update user password
+                $stmt = $conn->prepare("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?");
+                $stmt->bind_param("si", $hashed_password, $user_id);
+                $stmt->execute();
+                
+                // Delete used token
+                $stmt = $conn->prepare("DELETE FROM password_resets WHERE token = ?");
+                $stmt->bind_param("s", $token);
+                $stmt->execute();
+                
+                $conn->commit();
+                
+                $success_message = 'Password has been reset successfully! You can now login with your new password.';
+                $valid_token = false; // Hide form after successful reset
+                
+            } catch (Exception $e) {
+                $conn->rollback();
+                $error_message = 'Error updating password. Please try again.';
+            }
         }
-        
-    } catch (Exception $e) {
-        $message = 'An error occurred while validating the reset link. Please try again.';
-        $messageType = 'error';
-        ErrorHandler::logError("Password reset token validation failed: " . $e->getMessage());
-    }
-} else {
-    $message = 'No reset token provided. Please check your email for the correct link.';
-    $messageType = 'error';
-}
-
-// Handle password reset form submission
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && $tokenValid) {
-    try {
-        // Validate CSRF token
-        if (!CSRFProtection::validateToken($_POST['csrf_token'] ?? '')) {
-            throw new Exception("Invalid request. Please try again.");
-        }
-        
-        $newPassword = $_POST['new_password'] ?? '';
-        $confirmPassword = $_POST['confirm_password'] ?? '';
-        
-        if (empty($newPassword) || empty($confirmPassword)) {
-            throw new Exception("All fields are required");
-        }
-        
-        if ($newPassword !== $confirmPassword) {
-            throw new Exception("Passwords do not match");
-        }
-        
-        if (strlen($newPassword) < 8) {
-            throw new Exception("Password must be at least 8 characters long");
-        }
-        
-        if (!preg_match('/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/', $newPassword)) {
-            throw new Exception("Password must contain at least one uppercase letter, one lowercase letter, and one number");
-        }
-        
-        // Reset password using Auth class
-        $auth = new Auth();
-        $auth->resetPassword($token, $newPassword);
-        
-        redirect('login.php', 'Your password has been reset successfully. You can now login with your new password.', 'success');
-        
-    } catch (Exception $e) {
-        $message = $e->getMessage();
-        $messageType = 'error';
     }
 }
 
-$csrfToken = CSRFProtection::generateToken();
+// Generate CSRF token
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Reset Password - CMS Admin</title>
+    <link href="assets/css/admin.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #d5dce5;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 20px;
+            margin: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
         
         .reset-container {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
             width: 100%;
             max-width: 400px;
             text-align: center;
         }
         
-        .logo-container {
-            background: white;
-            border-radius: 25px;
-            padding: 20px;
-            margin-bottom: 20px;
-            height: 170px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        .reset-header {
+            margin-bottom: 30px;
         }
         
-        .logo-container img {
-            max-width: 100%;
-            max-height: 130px;
-            object-fit: contain;
+        .reset-header i {
+            font-size: 48px;
+            margin-bottom: 10px;
         }
         
-        .logo-placeholder {
-            color: #666;
-            font-size: 24px;
-            font-weight: bold;
+        .reset-header i.fa-shield-alt {
+            color: #28a745;
         }
         
-        .form-container {
-            background: #fbfbfb;
-            border-radius: 25px;
-            padding: 40px 30px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.15);
-            margin-bottom: 20px;
+        .reset-header i.fa-exclamation-triangle {
+            color: #dc3545;
         }
         
-        .form-title {
+        .reset-header h1 {
+            margin: 0 0 10px 0;
             color: #333;
-            font-size: 28px;
-            font-weight: 600;
-            margin-bottom: 30px;
+            font-size: 24px;
         }
         
-        .form-subtitle {
+        .reset-header p {
             color: #666;
+            margin: 0;
             font-size: 14px;
-            margin-bottom: 30px;
-            line-height: 1.5;
         }
         
         .form-group {
@@ -171,79 +140,130 @@ $csrfToken = CSRFProtection::generateToken();
         
         .form-group label {
             display: block;
-            margin-bottom: 8px;
-            color: #555;
+            margin-bottom: 5px;
+            color: #333;
             font-weight: 500;
         }
         
-        .form-control {
+        .form-group input {
             width: 100%;
-            padding: 12px 15px;
-            border: 2px solid #ddd;
-            border-radius: 8px;
-            font-size: 16px;
-            transition: border-color 0.3s ease;
+            padding: 12px;
+            border: 2px solid #e1e5e9;
+            border-radius: 5px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+            box-sizing: border-box;
         }
         
-        .form-control:focus {
+        .form-group input:focus {
             outline: none;
-            border-color: #1a269b;
-            box-shadow: 0 0 0 3px rgba(26, 38, 155, 0.1);
+            border-color: #667eea;
         }
         
-        .btn-submit {
+        .form-group small {
+            color: #666;
+            font-size: 12px;
+            margin-top: 5px;
+            display: block;
+        }
+        
+        .password-strength {
+            margin-top: 5px;
+            height: 4px;
+            background: #e1e5e9;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        
+        .password-strength-bar {
+            height: 100%;
+            width: 0%;
+            transition: width 0.3s, background-color 0.3s;
+            border-radius: 2px;
+        }
+        
+        .password-strength.weak .password-strength-bar {
+            width: 25%;
+            background-color: #dc3545;
+        }
+        
+        .password-strength.fair .password-strength-bar {
+            width: 50%;
+            background-color: #ffc107;
+        }
+        
+        .password-strength.good .password-strength-bar {
+            width: 75%;
+            background-color: #17a2b8;
+        }
+        
+        .password-strength.strong .password-strength-bar {
             width: 100%;
-            padding: 14px;
-            background: linear-gradient(135deg, #1a269b, #2d3db4);
+            background-color: #28a745;
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
-            border-radius: 8px;
+            border-radius: 5px;
             font-size: 16px;
-            font-weight: 600;
+            font-weight: 500;
             cursor: pointer;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            transition: transform 0.2s, box-shadow 0.2s;
         }
         
-        .btn-submit:hover {
+        .btn:hover {
             transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(26, 38, 155, 0.3);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
         }
         
-        .btn-submit:active {
+        .btn:active {
             transform: translateY(0);
         }
         
-        .message {
+        .btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        
+        .alert {
             padding: 12px;
-            border-radius: 8px;
+            border-radius: 5px;
             margin-bottom: 20px;
-            border-left: 4px solid;
+            text-align: left;
         }
         
-        .message.success {
-            background: #efe;
-            color: #363;
-            border-left-color: #4caf50;
+        .alert-success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
         }
         
-        .message.error {
-            background: #fee;
-            color: #c33;
-            border-left-color: #f44336;
+        .alert-error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
         }
         
-        .message.info {
-            background: #e3f2fd;
-            color: #1976d2;
-            border-left-color: #2196f3;
+        .alert-warning {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
         }
         
-        .back-to-login {
+        .back-link {
             margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e1e5e9;
         }
         
-        .back-to-login a {
-            color: #1a269b;
+        .back-link a {
+            color: #667eea;
             text-decoration: none;
             font-size: 14px;
             display: inline-flex;
@@ -251,413 +271,186 @@ $csrfToken = CSRFProtection::generateToken();
             gap: 5px;
         }
         
-        .back-to-login a:hover {
+        .back-link a:hover {
             text-decoration: underline;
         }
         
-        .password-requirements {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            font-size: 14px;
-            text-align: left;
-        }
-        
-        .password-requirements h4 {
-            margin-bottom: 10px;
-            color: #333;
-        }
-        
-        .password-requirements ul {
-            margin: 0;
-            padding-left: 20px;
-            color: #666;
-        }
-        
-        .password-requirements li {
-            margin-bottom: 5px;
-        }
-        
-        .security-notice {
-            background: #fff3cd;
-            color: #856404;
-            padding: 15px;
-            border-radius: 8px;
-            border-left: 4px solid #ffc107;
-            margin-bottom: 20px;
-            font-size: 14px;
-            text-align: left;
-        }
-        
-        .security-notice h4 {
-            margin-bottom: 10px;
-            color: #856404;
-        }
-        
-        .security-notice ul {
-            margin: 0;
-            padding-left: 20px;
-        }
-        
-        .security-notice li {
-            margin-bottom: 5px;
-        }
-        
-        .footer-text {
-            color: #666;
-            font-size: 12px;
-            margin-top: 20px;
-        }
-        
-        .token-info {
-            background: #e8f5e8;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            font-size: 14px;
-            text-align: left;
-            border-left: 4px solid #4caf50;
-        }
-        
-        .token-info h4 {
-            margin-bottom: 10px;
-            color: #2e7d32;
-        }
-        
-        .error-container {
-            text-align: center;
-            padding: 40px 20px;
-        }
-        
-        .error-icon {
-            font-size: 4rem;
-            color: #f44336;
-            margin-bottom: 20px;
-        }
-        
-        .error-title {
-            font-size: 24px;
-            color: #333;
-            margin-bottom: 15px;
-        }
-        
-        .error-description {
-            color: #666;
-            margin-bottom: 30px;
-            line-height: 1.6;
-        }
-        
-        .btn-link {
-            display: inline-block;
-            padding: 12px 30px;
-            background: linear-gradient(135deg, #1a269b, #2d3db4);
-            color: white;
-            text-decoration: none;
-            border-radius: 8px;
-            font-weight: 600;
-            transition: transform 0.2s ease;
-        }
-        
-        .btn-link:hover {
-            transform: translateY(-2px);
-            color: white;
-            text-decoration: none;
-        }
-        
-        /* Responsive Design */
         @media (max-width: 480px) {
             .reset-container {
-                max-width: 300px;
-            }
-            
-            .form-container {
+                margin: 20px;
                 padding: 30px 20px;
             }
-            
-            .logo-container {
-                height: 140px;
-            }
-        }
-        
-        /* Loading Animation */
-        .loading {
-            opacity: 0.7;
-            pointer-events: none;
-        }
-        
-        .loading .btn-submit::after {
-            content: '';
-            width: 20px;
-            height: 20px;
-            border: 2px solid transparent;
-            border-top: 2px solid white;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            display: inline-block;
-            margin-left: 10px;
-        }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
         }
     </style>
 </head>
 <body>
     <div class="reset-container">
-        <!-- Logo Container -->
-        <div class="logo-container">
-            <?php
-            // Try to get login logo from theme settings
-            try {
-                $db = DB::getInstance();
-                $stmt = $db->prepare("SELECT login_logo FROM theme_settings LIMIT 1");
-                $stmt->execute();
-                $theme = $stmt->fetch();
-                
-                if ($theme && !empty($theme['login_logo']) && file_exists(UPLOADS_PATH . '/logos/' . $theme['login_logo'])) {
-                    echo '<img src="' . UPLOADS_URL . '/logos/' . e($theme['login_logo']) . '" alt="Company Logo">';
-                } else {
-                    echo '<div class="logo-placeholder">CMS Admin</div>';
-                }
-            } catch (Exception $e) {
-                echo '<div class="logo-placeholder">CMS Admin</div>';
-            }
-            ?>
-        </div>
-        
-        <!-- Form Container -->
-        <div class="form-container">
-            <?php if ($tokenValid): ?>
-                <h1 class="form-title">Reset Password</h1>
-                <p class="form-subtitle">
-                    Please enter your new password below.
-                </p>
-                
-                <?php if (!empty($message)): ?>
-                    <div class="message <?= e($messageType) ?>">
-                        <?= e($message) ?>
-                    </div>
-                <?php endif; ?>
-                
-                <div class="token-info">
-                    <h4><i class="fas fa-shield-alt"></i> Secure Reset</h4>
-                    <p>This link is valid for one use only and will expire in 1 hour from when it was sent.</p>
-                </div>
-                
-                <div class="password-requirements">
-                    <h4>Password Requirements:</h4>
-                    <ul>
-                        <li id="req-length">At least 8 characters long</li>
-                        <li id="req-upper">At least one uppercase letter</li>
-                        <li id="req-lower">At least one lowercase letter</li>
-                        <li id="req-number">At least one number</li>
-                    </ul>
-                </div>
-                
-                <form method="POST" id="resetPasswordForm">
-                    <input type="hidden" name="csrf_token" value="<?= e($csrfToken) ?>">
-                    
-                    <div class="form-group">
-                        <label for="new_password">New Password</label>
-                        <input type="password" 
-                               id="new_password" 
-                               name="new_password" 
-                               class="form-control" 
-                               required 
-                               minlength="8"
-                               autocomplete="new-password"
-                               placeholder="Enter your new password">
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="confirm_password">Confirm New Password</label>
-                        <input type="password" 
-                               id="confirm_password" 
-                               name="confirm_password" 
-                               class="form-control" 
-                               required 
-                               autocomplete="new-password"
-                               placeholder="Confirm your new password">
-                    </div>
-                    
-                    <button type="submit" class="btn-submit">
-                        Reset Password
-                    </button>
-                </form>
-                
-                <div class="security-notice">
-                    <h4><i class="fas fa-info-circle"></i> Security Tips:</h4>
-                    <ul>
-                        <li>Choose a password you haven't used before</li>
-                        <li>Don't share your password with anyone</li>
-                        <li>Consider using a password manager</li>
-                        <li>Log out of all devices after resetting</li>
-                    </ul>
-                </div>
-                
-            <?php else: ?>
-                <!-- Invalid Token Display -->
-                <div class="error-container">
-                    <div class="error-icon">
-                        <i class="fas fa-exclamation-triangle"></i>
-                    </div>
-                    
-                    <h2 class="error-title">Invalid Reset Link</h2>
-                    
-                    <div class="error-description">
-                        <?php if (!empty($message)): ?>
-                            <p><?= e($message) ?></p>
-                        <?php else: ?>
-                            <p>This password reset link is invalid, expired, or has already been used.</p>
-                        <?php endif; ?>
-                        
-                        <p>Password reset links are valid for 1 hour and can only be used once for security reasons.</p>
-                    </div>
-                    
-                    <a href="forgot_password.php" class="btn-link">
-                        <i class="fas fa-redo"></i>
-                        Request New Reset Link
-                    </a>
-                </div>
-            <?php endif; ?>
+        <?php if (!$valid_token && empty($success_message)): ?>
+            <div class="reset-header">
+                <i class="fas fa-exclamation-triangle"></i>
+                <h1>Invalid Token</h1>
+                <p>The password reset link is invalid or has expired.</p>
+            </div>
             
-            <div class="back-to-login">
-                <a href="login.php">
-                    <i class="fas fa-arrow-left"></i>
-                    Back to Login
+            <div class="alert alert-warning">
+                <i class="fas fa-exclamation-triangle"></i> This password reset link is no longer valid. Please request a new password reset.
+            </div>
+            
+            <div class="back-link">
+                <a href="forgot_password.php">
+                    <i class="fas fa-arrow-left"></i> Request New Reset
                 </a>
             </div>
-        </div>
-        
-        <!-- Footer -->
-        <div class="footer-text">
-            By YD Multimedia <?= date('Y') ?>
-        </div>
+            
+        <?php elseif ($success_message): ?>
+            <div class="reset-header">
+                <i class="fas fa-check-circle" style="color: #28a745;"></i>
+                <h1>Password Reset Complete</h1>
+                <p>Your password has been successfully updated.</p>
+            </div>
+            
+            <div class="alert alert-success">
+                <i class="fas fa-check-circle"></i> <?php echo htmlspecialchars($success_message); ?>
+            </div>
+            
+            <div class="back-link">
+                <a href="login.php">
+                    <i class="fas fa-sign-in-alt"></i> Go to Login
+                </a>
+            </div>
+            
+        <?php else: ?>
+            <div class="reset-header">
+                <i class="fas fa-shield-alt"></i>
+                <h1>Reset Password</h1>
+                <p>Enter your new password below.</p>
+            </div>
+
+            <?php if ($error_message): ?>
+                <div class="alert alert-error">
+                    <i class="fas fa-exclamation-circle"></i> <?php echo htmlspecialchars($error_message); ?>
+                </div>
+            <?php endif; ?>
+
+            <form method="POST" id="resetForm">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+                
+                <div class="form-group">
+                    <label for="new_password">New Password</label>
+                    <input type="password" id="new_password" name="new_password" required 
+                           placeholder="Enter new password" minlength="8">
+                    <div class="password-strength" id="passwordStrength">
+                        <div class="password-strength-bar"></div>
+                    </div>
+                    <small>Password must be at least 8 characters long</small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="confirm_password">Confirm Password</label>
+                    <input type="password" id="confirm_password" name="confirm_password" required 
+                           placeholder="Confirm new password">
+                    <small id="passwordMatch"></small>
+                </div>
+                
+                <button type="submit" class="btn" id="submitBtn">
+                    <i class="fas fa-key"></i> Reset Password
+                </button>
+            </form>
+
+            <div class="back-link">
+                <a href="login.php">
+                    <i class="fas fa-arrow-left"></i> Back to Login
+                </a>
+            </div>
+        <?php endif; ?>
     </div>
-    
-    <!-- Font Awesome -->
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    
+
     <script>
-        // Form submission with loading state
-        document.getElementById('resetPasswordForm')?.addEventListener('submit', function() {
-            this.classList.add('loading');
+        const newPasswordField = document.getElementById('new_password');
+        const confirmPasswordField = document.getElementById('confirm_password');
+        const passwordStrength = document.getElementById('passwordStrength');
+        const passwordMatch = document.getElementById('passwordMatch');
+        const submitBtn = document.getElementById('submitBtn');
+
+        // Password strength checker
+        newPasswordField.addEventListener('input', function() {
+            const password = this.value;
+            const strength = calculatePasswordStrength(password);
+            updatePasswordStrengthIndicator(strength);
+            checkPasswordMatch();
         });
-        
-        // Password confirmation validation
-        const confirmPassword = document.getElementById('confirm_password');
-        const newPassword = document.getElementById('new_password');
-        
-        if (confirmPassword && newPassword) {
-            confirmPassword.addEventListener('input', function() {
-                if (this.value !== newPassword.value) {
-                    this.setCustomValidity('Passwords do not match');
-                    this.style.borderColor = '#f44336';
-                } else {
-                    this.setCustomValidity('');
-                    this.style.borderColor = '#4caf50';
-                }
-            });
-            
-            // Real-time password strength indication
-            newPassword.addEventListener('input', function() {
-                const password = this.value;
-                
-                // Check requirements
-                const requirements = [
-                    { id: 'req-length', check: password.length >= 8 },
-                    { id: 'req-upper', check: /[A-Z]/.test(password) },
-                    { id: 'req-lower', check: /[a-z]/.test(password) },
-                    { id: 'req-number', check: /\d/.test(password) }
-                ];
-                
-                let validCount = 0;
-                requirements.forEach(req => {
-                    const element = document.getElementById(req.id);
-                    if (req.check) {
-                        element.style.color = '#4caf50';
-                        element.style.textDecoration = 'line-through';
-                        element.innerHTML = '<i class="fas fa-check"></i> ' + element.textContent.replace('✓ ', '');
-                        validCount++;
-                    } else {
-                        element.style.color = '#666';
-                        element.style.textDecoration = 'none';
-                        element.innerHTML = element.textContent.replace('<i class="fas fa-check"></i> ', '');
-                    }
-                });
-                
-                // Update password field border color
-                if (validCount === requirements.length) {
-                    this.style.borderColor = '#4caf50';
-                } else if (password.length > 0) {
-                    this.style.borderColor = '#ffc107';
-                } else {
-                    this.style.borderColor = '#ddd';
-                }
-                
-                // Re-validate confirm password if it has a value
-                if (confirmPassword.value) {
-                    confirmPassword.dispatchEvent(new Event('input'));
-                }
-            });
+
+        // Password match checker
+        confirmPasswordField.addEventListener('input', checkPasswordMatch);
+
+        function calculatePasswordStrength(password) {
+            let strength = 0;
+            if (password.length >= 8) strength++;
+            if (/[a-z]/.test(password)) strength++;
+            if (/[A-Z]/.test(password)) strength++;
+            if (/[0-9]/.test(password)) strength++;
+            if (/[^A-Za-z0-9]/.test(password)) strength++;
+            return strength;
         }
-        
-        // Remove message on input
-        document.querySelectorAll('.form-control').forEach(function(input) {
-            input.addEventListener('input', function() {
-                const message = document.querySelector('.message');
-                if (message && message.classList.contains('error')) {
-                    message.style.opacity = '0.5';
-                }
-            });
-        });
-        
-        // Auto-focus first input
-        document.addEventListener('DOMContentLoaded', function() {
-            const firstInput = document.querySelector('.form-control');
-            if (firstInput) {
-                firstInput.focus();
+
+        function updatePasswordStrengthIndicator(strength) {
+            passwordStrength.className = 'password-strength';
+            
+            if (strength === 0) {
+                passwordStrength.classList.add('weak');
+            } else if (strength <= 2) {
+                passwordStrength.classList.add('weak');
+            } else if (strength === 3) {
+                passwordStrength.classList.add('fair');
+            } else if (strength === 4) {
+                passwordStrength.classList.add('good');
+            } else {
+                passwordStrength.classList.add('strong');
+            }
+        }
+
+        function checkPasswordMatch() {
+            const newPassword = newPasswordField.value;
+            const confirmPassword = confirmPasswordField.value;
+            
+            if (confirmPassword.length === 0) {
+                passwordMatch.textContent = '';
+                passwordMatch.style.color = '';
+                submitBtn.disabled = false;
+                return;
             }
             
-            // Add enhanced security notice
-            const securityNotice = document.querySelector('.security-notice');
-            if (securityNotice) {
-                securityNotice.addEventListener('click', function() {
-                    this.style.backgroundColor = '#f0f8e7';
-                    setTimeout(() => {
-                        this.style.backgroundColor = '#fff3cd';
-                    }, 200);
-                });
+            if (newPassword === confirmPassword) {
+                passwordMatch.textContent = 'Passwords match';
+                passwordMatch.style.color = '#28a745';
+                submitBtn.disabled = false;
+            } else {
+                passwordMatch.textContent = 'Passwords do not match';
+                passwordMatch.style.color = '#dc3545';
+                submitBtn.disabled = true;
+            }
+        }
+
+        // Form validation
+        document.getElementById('resetForm').addEventListener('submit', function(e) {
+            const newPassword = newPasswordField.value;
+            const confirmPassword = confirmPasswordField.value;
+            
+            if (newPassword.length < 8) {
+                e.preventDefault();
+                alert('Password must be at least 8 characters long.');
+                return;
+            }
+            
+            if (newPassword !== confirmPassword) {
+                e.preventDefault();
+                alert('Passwords do not match.');
+                return;
             }
         });
-        
-        // Token expiration countdown (if needed)
-        function startExpirationCountdown() {
-            // This could be enhanced to show a real countdown
-            // For now, just show a warning after 45 minutes
-            setTimeout(function() {
-                const warning = document.createElement('div');
-                warning.className = 'message error';
-                warning.innerHTML = '<i class="fas fa-clock"></i> This reset link will expire soon. Please complete your password reset.';
-                
-                const form = document.querySelector('form');
-                if (form) {
-                    form.parentNode.insertBefore(warning, form);
-                }
-            }, 45 * 60 * 1000); // 45 minutes
-        }
-        
-        // Start countdown if form is present
-        if (document.getElementById('resetPasswordForm')) {
-            startExpirationCountdown();
-        }
-        
-        // Prevent form resubmission on page refresh
-        if (window.history.replaceState) {
-            window.history.replaceState(null, null, window.location.href);
-        }
+
+        // Auto-focus new password field
+        newPasswordField.focus();
     </script>
 </body>
 </html>
