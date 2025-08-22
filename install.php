@@ -852,6 +852,11 @@ function handleLogoUploads($pdo) {
                 
                 <form method="POST">
                     <div class="form-group">
+                        <label for="db_host">Database Host</label>
+                        <input type="text" id="db_host" name="db_host" class="form-control" value="localhost" required>
+                    </div>
+                    
+                    <div class="form-group">
                         <label for="db_name">Database Name</label>
                         <input type="text" id="db_name" name="db_name" class="form-control" value="cms_database" required>
                     </div>
@@ -864,6 +869,7 @@ function handleLogoUploads($pdo) {
                     <div class="form-group">
                         <label for="db_password">Database Password</label>
                         <input type="password" id="db_password" name="db_password" class="form-control">
+                        <small style="color: #666;">Leave blank if no password is required</small>
                     </div>
                     
                     <button type="submit" class="btn btn-primary">Next Step</button>
