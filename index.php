@@ -19,6 +19,520 @@ $modules = getActiveModulesByPosition();
 
 // Get all active categories with products
 $categoriesWithProducts = getCategoriesWithProducts();
+
+/**
+ * Get site favicon with fallback
+ */
+function getSiteFavicon($conn) {
+    $stmt = $conn->prepare("SELECT setting_value FROM site_settings WHERE setting_name = 'favicon'");
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $favicon = $result->fetch_assoc();
+    
+    if ($favicon && !empty($favicon['setting_value'])) {
+        return 'uploads/logos/' . $favicon['setting_value'];
+    }
+    
+    return 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🌐</text></svg>';
+}
+
+/**
+ * Get structured data for SEO
+ */
+function getStructuredData($conn) {
+    // Get site settings
+    $stmt = $conn->prepare("SELECT setting_name, setting_value FROM site_settings WHERE setting_name IN ('site_name', 'site_description', 'contact_email', 'contact_phone', 'site_logo')");
+    $stmt->execute();
+    $result = $stmt->get_result();
+    
+    $settings = [];
+    while ($row = $result->fetch_assoc()) {
+        $settings[$row['setting_name']] = $row['setting_value'];
+    }
+    
+    $structured_data = [
+        "@context" => "https://schema.org",
+        "@type" => "Organization",
+        "name" => $settings['site_name'] ?? 'CMS Website',
+        "description" => $settings['site_description'] ?? '',
+        "url" => getCurrentUrl(),
+    ];
+    
+    if (!empty($settings['site_logo'])) {
+        $structured_data['logo'] = getCurrentUrl() . '/uploads/logos/' . $settings['site_logo'];
+    }
+    
+    if (!empty($settings['contact_email'])) {
+        $structured_data['email'] = $settings['contact_email'];
+    }
+    
+    if (!empty($settings['contact_phone'])) {
+        $structured_data['telephone'] = $settings['contact_phone'];
+    }
+    
+    return json_encode($structured_data, JSON_UNESCAPED_SLASHES);
+}
+
+/**
+ * Get current URL
+ */
+function getCurrentUrl() {
+    $protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'];
+    return $protocol . '://' . $host;
+}
+
+/**
+ * Generate breadcrumb navigation
+ */
+function generateBreadcrumbs($current_page = '') {
+    $breadcrumbs = '<nav aria-label="breadcrumb" class="breadcrumb-nav">';
+    $breadcrumbs .= '<ol class="breadcrumb">';
+    $breadcrumbs .= '<li class="breadcrumb-item"><a href="/">Home</a></li>';
+    
+    if (!empty($current_page)) {
+        $breadcrumbs .= '<li class="breadcrumb-item active" aria-current="page">' . htmlspecialchars($current_page) . '</li>';
+    }
+    
+    $breadcrumbs .= '</ol>';
+    $breadcrumbs .= '</nav>';
+    
+    return $breadcrumbs;
+}
+
+/**
+ * Get social media meta tags
+ */
+function getSocialMetaTags($conn, $title = '', $description = '', $image = '') {
+    // Get site settings
+    $stmt = $conn->prepare("SELECT setting_name, setting_value FROM site_settings WHERE setting_name IN ('site_name', 'site_description', 'site_logo')");
+    $stmt->execute();
+    $result = $stmt->get_result();
+    
+    $settings = [];
+    while ($row = $result->fetch_assoc()) {
+        $settings[$row['setting_name']] = $row['setting_value'];
+    }
+    
+    $site_name = $settings['site_name'] ?? 'CMS Website';
+    $site_description = $settings['site_description'] ?? '';
+    $site_logo = $settings['site_logo'] ?? '';
+    
+    $meta_title = !empty($title) ? $title : $site_name;
+    $meta_description = !empty($description) ? $description : $site_description;
+    $meta_image = !empty($image) ? $image : (!empty($site_logo) ? getCurrentUrl() . '/uploads/logos/' . $site_logo : '');
+    $current_url = getCurrentUrl() . $_SERVER['REQUEST_URI'];
+    
+    $meta_tags = '';
+    
+    // Open Graph meta tags
+    $meta_tags .= '<meta property="og:title" content="' . htmlspecialchars($meta_title) . '">' . "\n";
+    $meta_tags .= '<meta property="og:description" content="' . htmlspecialchars($meta_description) . '">' . "\n";
+    $meta_tags .= '<meta property="og:url" content="' . htmlspecialchars($current_url) . '">' . "\n";
+    $meta_tags .= '<meta property="og:site_name" content="' . htmlspecialchars($site_name) . '">' . "\n";
+    $meta_tags .= '<meta property="og:type" content="website">' . "\n";
+    
+    if (!empty($meta_image)) {
+        $meta_tags .= '<meta property="og:image" content="' . htmlspecialchars($meta_image) . '">' . "\n";
+        $meta_tags .= '<meta property="og:image:alt" content="' . htmlspecialchars($meta_title) . '">' . "\n";
+    }
+    
+    // Twitter Card meta tags
+    $meta_tags .= '<meta name="twitter:card" content="summary_large_image">' . "\n";
+    $meta_tags .= '<meta name="twitter:title" content="' . htmlspecialchars($meta_title) . '">' . "\n";
+    $meta_tags .= '<meta name="twitter:description" content="' . htmlspecialchars($meta_description) . '">' . "\n";
+    
+    if (!empty($meta_image)) {
+        $meta_tags .= '<meta name="twitter:image" content="' . htmlspecialchars($meta_image) . '">' . "\n";
+    }
+    
+    return $meta_tags;
+}
+
+/**
+ * Track page view for analytics
+ */
+function trackPageView($conn) {
+    try {
+        $user_ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? '';
+        $page_url = $_SERVER['REQUEST_URI'] ?? '/';
+        $referrer = $_SERVER['HTTP_REFERER'] ?? '';
+        
+        // Get country from IP (simplified)
+        $country = getCountryFromIP($user_ip);
+        
+        // Insert visitor stats
+        $stmt = $conn->prepare("INSERT INTO visitor_stats (ip_address, user_agent, page_url, referrer, country, visit_time) VALUES (?, ?, ?, ?, ?, NOW())");
+        $stmt->bind_param("sssss", $user_ip, $user_agent, $page_url, $referrer, $country);
+        $stmt->execute();
+        
+    } catch (Exception $e) {
+        error_log("Page view tracking error: " . $e->getMessage());
+    }
+}
+
+/**
+ * Get country from IP address (simplified version)
+ */
+function getCountryFromIP($ip) {
+    // In production, you would use a proper GeoIP service
+    // This is a simplified version
+    if ($ip === '127.0.0.1' || $ip === 'localhost' || filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE) === false) {
+        return 'Local';
+    }
+    
+    // You can integrate with services like:
+    // - MaxMind GeoIP2
+    // - ip-api.com
+    // - ipinfo.io
+    
+    return 'Unknown';
+}
+
+/**
+ * Get performance metrics
+ */
+function trackPerformanceMetrics($conn, $page_load_time) {
+    try {
+        $page_url = $_SERVER['REQUEST_URI'] ?? '/';
+        $memory_usage = memory_get_peak_usage(true);
+        $server_response_time = microtime(true) - $_SERVER['REQUEST_TIME_FLOAT'];
+        
+        $stmt = $conn->prepare("INSERT INTO performance_metrics (page_url, load_time, memory_usage, server_response_time, recorded_at) VALUES (?, ?, ?, ?, NOW())");
+        $stmt->bind_param("sddd", $page_url, $page_load_time, $memory_usage, $server_response_time);
+        $stmt->execute();
+        
+    } catch (Exception $e) {
+        error_log("Performance tracking error: " . $e->getMessage());
+    }
+}
+
+/**
+ * Generate CSS variables from theme settings
+ */
+function generateThemeCSS($conn) {
+    $stmt = $conn->prepare("SELECT setting_name, setting_value FROM site_settings WHERE setting_name LIKE '%color%' OR setting_name LIKE '%font%' OR setting_name LIKE '%size%' OR setting_name LIKE '%padding%' OR setting_name LIKE '%margin%'");
+    $stmt->execute();
+    $result = $stmt->get_result();
+    
+    $css = ":root {\n";
+    
+    while ($row = $result->fetch_assoc()) {
+        $css_var_name = '--' . str_replace('_', '-', $row['setting_name']);
+        $css_value = $row['setting_value'];
+        
+        // Add units where needed
+        if (preg_match('/^(font_size|padding|margin|width|height)/', $row['setting_name']) && is_numeric($css_value)) {
+            $css_value .= 'px';
+        }
+        
+        $css .= "    {$css_var_name}: {$css_value};\n";
+    }
+    
+    $css .= "}\n";
+    
+    return $css;
+}
+
+/**
+ * Load Google Fonts
+ */
+function loadGoogleFonts($conn) {
+    $stmt = $conn->prepare("SELECT setting_value FROM site_settings WHERE setting_name = 'google_fonts'");
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $fonts = $result->fetch_assoc();
+    
+    if ($fonts && !empty($fonts['setting_value'])) {
+        return '<link href="https://fonts.googleapis.com/css2?family=' . urlencode($fonts['setting_value']) . '&display=swap" rel="stylesheet">';
+    }
+    
+    return '';
+}
+
+/**
+ * Get maintenance mode status
+ */
+function isMaintenanceMode($conn) {
+    $stmt = $conn->prepare("SELECT setting_value FROM site_settings WHERE setting_name = 'maintenance_mode'");
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $setting = $result->fetch_assoc();
+    
+    return $setting && $setting['setting_value'] === '1';
+}
+
+/**
+ * Generate sitemap XML
+ */
+function generateSitemap($conn) {
+    $sitemap = '<?xml version="1.0" encoding="UTF-8"?>' . "\n";
+    $sitemap .= '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' . "\n";
+    
+    $base_url = getCurrentUrl();
+    
+    // Add homepage
+    $sitemap .= '  <url>' . "\n";
+    $sitemap .= '    <loc>' . $base_url . '/</loc>' . "\n";
+    $sitemap .= '    <changefreq>daily</changefreq>' . "\n";
+    $sitemap .= '    <priority>1.0</priority>' . "\n";
+    $sitemap .= '  </url>' . "\n";
+    
+    // Add categories
+    $stmt = $conn->prepare("SELECT slug, updated_at FROM categories WHERE is_active = 1");
+    $stmt->execute();
+    $result = $stmt->get_result();
+    
+    while ($category = $result->fetch_assoc()) {
+        $sitemap .= '  <url>' . "\n";
+        $sitemap .= '    <loc>' . $base_url . '/category/' . urlencode($category['slug']) . '</loc>' . "\n";
+        $sitemap .= '    <lastmod>' . date('Y-m-d', strtotime($category['updated_at'])) . '</lastmod>' . "\n";
+        $sitemap .= '    <changefreq>weekly</changefreq>' . "\n";
+        $sitemap .= '    <priority>0.8</priority>' . "\n";
+        $sitemap .= '  </url>' . "\n";
+    }
+    
+    // Add products
+    $stmt = $conn->prepare("SELECT slug, updated_at FROM products WHERE is_active = 1");
+    $stmt->execute();
+    $result = $stmt->get_result();
+    
+    while ($product = $result->fetch_assoc()) {
+        $sitemap .= '  <url>' . "\n";
+        $sitemap .= '    <loc>' . $base_url . '/product/' . urlencode($product['slug']) . '</loc>' . "\n";
+        $sitemap .= '    <lastmod>' . date('Y-m-d', strtotime($product['updated_at'])) . '</lastmod>' . "\n";
+        $sitemap .= '    <changefreq>monthly</changefreq>' . "\n";
+        $sitemap .= '    <priority>0.6</priority>' . "\n";
+        $sitemap .= '  </url>' . "\n";
+    }
+    
+    $sitemap .= '</urlset>';
+    
+    return $sitemap;
+}
+
+/**
+ * Generate robots.txt content
+ */
+function generateRobotsTxt() {
+    $robots = "User-agent: *\n";
+    $robots .= "Allow: /\n";
+    $robots .= "Disallow: /admin/\n";
+    $robots .= "Disallow: /config/\n";
+    $robots .= "Disallow: /ajax/\n";
+    $robots .= "Disallow: /logs/\n";
+    $robots .= "\n";
+    $robots .= "Sitemap: " . getCurrentUrl() . "/sitemap.xml\n";
+    
+    return $robots;
+}
+
+/**
+ * Minify CSS content
+ */
+function minifyCSS($css) {
+    // Remove comments
+    $css = preg_replace('!/\*[^*]*\*+([^/][^*]*\*+)*/!', '', $css);
+    
+    // Remove unnecessary whitespace
+    $css = str_replace(["\r\n", "\r", "\n", "\t", '  ', '    ', '    '], '', $css);
+    $css = str_replace(['; ', ' ;', ' {', '{ ', '} ', ' }', ': ', ' :'], [';', ';', '{', '{', '}', '}', ':', ':'], $css);
+    
+    return trim($css);
+}
+
+/**
+ * Minify JavaScript content
+ */
+function minifyJS($js) {
+    // Simple minification - remove comments and extra whitespace
+    $js = preg_replace('/\/\*[\s\S]*?\*\//', '', $js); // Remove /* */ comments
+    $js = preg_replace('/\/\/.*$/', '', $js); // Remove // comments
+    $js = preg_replace('/\s+/', ' ', $js); // Replace multiple whitespace with single space
+    $js = str_replace(['; ', ' ;', ' {', '{ ', '} ', ' }'], [';', ';', '{', '{', '}', '}'], $js);
+    
+    return trim($js);
+}
+
+/**
+ * Get cache buster for static assets
+ */
+function getCacheBuster($file_path) {
+    if (file_exists($file_path)) {
+        return '?v=' . filemtime($file_path);
+    }
+    return '?v=' . time();
+}
+
+/**
+ * Generate responsive image HTML
+ */
+function generateResponsiveImage($image_path, $alt_text = '', $classes = '', $lazy_load = true) {
+    if (empty($image_path)) {
+        return '';
+    }
+    
+    $full_path = 'uploads/images/' . $image_path;
+    $thumb_path = 'uploads/thumbnails/thumb_' . $image_path;
+    
+    $img_attrs = [
+        'class' => $classes,
+        'alt' => htmlspecialchars($alt_text)
+    ];
+    
+    if ($lazy_load) {
+        $img_attrs['loading'] = 'lazy';
+        $img_attrs['data-src'] = $full_path;
+        $img_attrs['src'] = file_exists($thumb_path) ? $thumb_path : $full_path;
+    } else {
+        $img_attrs['src'] = $full_path;
+    }
+    
+    $attr_string = '';
+    foreach ($img_attrs as $key => $value) {
+        if (!empty($value)) {
+            $attr_string .= ' ' . $key . '="' . $value . '"';
+        }
+    }
+    
+    return '<img' . $attr_string . '>';
+}
+
+/**
+ * Get page loading animation
+ */
+function getPageLoader() {
+    return '
+    <div id="page-loader" class="page-loader">
+        <div class="loader-content">
+            <div class="spinner"></div>
+            <p>Loading...</p>
+        </div>
+    </div>
+    ';
+}
+
+/**
+ * Generate scroll-to-top button
+ */
+function getScrollToTopButton() {
+    return '
+    <button id="scroll-to-top" class="scroll-to-top" aria-label="Scroll to top">
+        <i class="fas fa-chevron-up"></i>
+    </button>
+    ';
+}
+
+/**
+ * Get cookie consent banner
+ */
+function getCookieConsentBanner($conn) {
+    $stmt = $conn->prepare("SELECT setting_value FROM site_settings WHERE setting_name = 'cookie_consent_enabled'");
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $setting = $result->fetch_assoc();
+    
+    if (!$setting || $setting['setting_value'] !== '1') {
+        return '';
+    }
+    
+    return '
+    <div id="cookie-consent" class="cookie-consent" style="display: none;">
+        <div class="cookie-content">
+            <p>This website uses cookies to ensure you get the best experience on our website.</p>
+            <div class="cookie-actions">
+                <button id="accept-cookies" class="btn btn-primary">Accept</button>
+                <button id="decline-cookies" class="btn btn-secondary">Decline</button>
+            </div>
+        </div>
+    </div>
+    ';
+}
+
+/**
+ * Generate navigation menu from modules
+ */
+function generateNavigationMenu($conn) {
+    $stmt = $conn->prepare("SELECT content_data FROM modules WHERE type = 'menu' AND is_active = 1 ORDER BY display_order LIMIT 1");
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $menu_module = $result->fetch_assoc();
+    
+    if (!$menu_module) {
+        return '';
+    }
+    
+    $menu_data = json_decode($menu_module['content_data'], true);
+    $menu_items = $menu_data['menu_items'] ?? [];
+    
+    if (empty($menu_items)) {
+        return '';
+    }
+    
+    $nav_html = '<nav class="main-navigation" role="navigation">';
+    $nav_html .= '<div class="nav-container">';
+    $nav_html .= '<button class="mobile-menu-toggle" aria-label="Toggle menu">';
+    $nav_html .= '<span class="hamburger"></span>';
+    $nav_html .= '</button>';
+    $nav_html .= '<ul class="nav-menu">';
+    
+    foreach ($menu_items as $item) {
+        $nav_html .= '<li class="nav-item">';
+        $nav_html .= '<a href="' . htmlspecialchars($item['url']) . '" class="nav-link"';
+        
+        if (!empty($item['target'])) {
+            $nav_html .= ' target="' . htmlspecialchars($item['target']) . '"';
+        }
+        
+        $nav_html .= '>' . htmlspecialchars($item['text']) . '</a>';
+        $nav_html .= '</li>';
+    }
+    
+    $nav_html .= '</ul>';
+    $nav_html .= '</div>';
+    $nav_html .= '</nav>';
+    
+    return $nav_html;
+}
+
+/**
+ * Generate meta tags for SEO
+ */
+function generateSEOMetaTags($conn, $page_title = '', $page_description = '', $keywords = '') {
+    // Get site settings
+    $stmt = $conn->prepare("SELECT setting_name, setting_value FROM site_settings WHERE setting_name IN ('site_name', 'site_description', 'default_keywords')");
+    $stmt->execute();
+    $result = $stmt->get_result();
+    
+    $settings = [];
+    while ($row = $result->fetch_assoc()) {
+        $settings[$row['setting_name']] = $row['setting_value'];
+    }
+    
+    $site_name = $settings['site_name'] ?? 'CMS Website';
+    $site_description = $settings['site_description'] ?? '';
+    $default_keywords = $settings['default_keywords'] ?? '';
+    
+    $title = !empty($page_title) ? $page_title . ' | ' . $site_name : $site_name;
+    $description = !empty($page_description) ? $page_description : $site_description;
+    $meta_keywords = !empty($keywords) ? $keywords : $default_keywords;
+    
+    $meta_tags = '';
+    $meta_tags .= '<title>' . htmlspecialchars($title) . '</title>' . "\n";
+    $meta_tags .= '<meta name="description" content="' . htmlspecialchars($description) . '">' . "\n";
+    
+    if (!empty($meta_keywords)) {
+        $meta_tags .= '<meta name="keywords" content="' . htmlspecialchars($meta_keywords) . '">' . "\n";
+    }
+    
+    $meta_tags .= '<meta name="robots" content="index, follow">' . "\n";
+    $meta_tags .= '<meta name="viewport" content="width=device-width, initial-scale=1.0">' . "\n";
+    $meta_tags .= '<meta name="author" content="' . htmlspecialchars($site_name) . '">' . "\n";
+    $meta_tags .= '<link rel="canonical" href="' . getCurrentUrl() . $_SERVER['REQUEST_URI'] . '">' . "\n";
+    
+    return $meta_tags;
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
