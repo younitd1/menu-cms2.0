@@ -38,16 +38,6 @@ if (!defined('MODULE_POSITIONS')) {
     ]);
 }
 
-// Or if you're using a constant definition, make sure MODULE_POSITIONS is accessible:
-const MODULE_POSITIONS = [
-    'top-module-1' => 'Top Module 1',
-    'top-module-2' => 'Top Module 2', 
-    'middle-module-1' => 'Middle Module 1',
-    'middle-module-2' => 'Middle Module 2',
-    'bottom-module-1' => 'Bottom Module 1',
-    'bottom-module-2' => 'Bottom Module 2'
-];
-
 // URL constants (adjust these based on your setup)
 $protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http';
 $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
