@@ -1,141 +1,337 @@
 <?php
 /**
  * Main Configuration File
- * Contains all system-wide configurations and constants
+ * Sets up database connection, constants, and autoloads classes
  */
 
-// Error reporting (set to false in production)
-define('DEBUG_MODE', true);
-
-if (DEBUG_MODE) {
-    error_reporting(E_ALL);
-    ini_set('display_errors', 1);
-} else {
-    error_reporting(0);
-    ini_set('display_errors', 0);
+// Error reporting for development
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+// Start session if not already started
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// System paths
-define('ROOT_PATH', dirname(__DIR__));
-define('CONFIG_PATH', ROOT_PATH . '/config');
-define('INCLUDES_PATH', ROOT_PATH . '/includes');
-define('UPLOADS_PATH', ROOT_PATH . '/uploads');
-define('ADMIN_PATH', ROOT_PATH . '/admin');
-define('LOGS_PATH', ROOT_PATH . '/logs');
+// Load database credentials
+$dbConfig = require_once __DIR__ . '/database_credentials.php';
 
-// URL configuration
-define('BASE_URL', 'http://localhost/cms'); // Change this to your domain
+// Define constants
+define('ROOT_PATH', dirname(__DIR__));
+define('ADMIN_PATH', ROOT_PATH . '/admin');
+define('UPLOADS_PATH', ROOT_PATH . '/uploads');
+define('CONFIG_PATH', ROOT_PATH . '/config');
+define('DEFAULT_ITEMS_PER_PAGE', 10);
+define('UPLOAD_IMAGES_PATH', UPLOADS_PATH . '/images');
+
+
+// Add this to your config/config.php file if not already present
+
+// Define module positions if not defined
+if (!defined('MODULE_POSITIONS')) {
+    define('MODULE_POSITIONS', [
+        'top-module-1' => 'Top Module 1',
+        'top-module-2' => 'Top Module 2', 
+        'middle-module-1' => 'Middle Module 1',
+        'middle-module-2' => 'Middle Module 2',
+        'bottom-module-1' => 'Bottom Module 1',
+        'bottom-module-2' => 'Bottom Module 2'
+    ]);
+}
+
+// Or if you're using a constant definition, make sure MODULE_POSITIONS is accessible:
+const MODULE_POSITIONS = [
+    'top-module-1' => 'Top Module 1',
+    'top-module-2' => 'Top Module 2', 
+    'middle-module-1' => 'Middle Module 1',
+    'middle-module-2' => 'Middle Module 2',
+    'bottom-module-1' => 'Bottom Module 1',
+    'bottom-module-2' => 'Bottom Module 2'
+];
+
+// URL constants (adjust these based on your setup)
+$protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http';
+$host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+
+// Get the base path correctly
+$scriptPath = $_SERVER['SCRIPT_NAME'] ?? '';
+if (strpos($scriptPath, '/admin/') !== false) {
+    // If we're in admin folder, go up one level
+    $basePath = dirname(dirname($scriptPath));
+} else {
+    $basePath = dirname($scriptPath);
+}
+
+define('BASE_URL', $protocol . '://' . $host . $basePath);
 define('ADMIN_URL', BASE_URL . '/admin');
 define('UPLOADS_URL', BASE_URL . '/uploads');
 
-// File upload settings
-define('MAX_FILE_SIZE', 307200); // 300KB in bytes
-define('ALLOWED_IMAGE_TYPES', ['image/jpeg']);
-define('UPLOAD_IMAGES_PATH', UPLOADS_PATH . '/images');
-define('UPLOAD_THUMBNAILS_PATH', UPLOADS_PATH . '/thumbnails');
-
-// Image processing settings
-define('THUMBNAIL_MAX_WIDTH', 400);
-define('PRODUCT_IMAGE_MAX_WIDTH', 600);
-define('CATEGORY_BACKGROUND_WIDTH', 1600);
-define('CATEGORY_BACKGROUND_HEIGHT', 650);
-
-// Security settings
-define('SESSION_LIFETIME', 1440); // 24 minutes in seconds
+// Security constants
 define('MAX_LOGIN_ATTEMPTS', 5);
 define('LOCKOUT_DURATION', 900); // 15 minutes in seconds
-define('CSRF_TOKEN_LIFETIME', 1800); // 30 minutes
+define('SESSION_TIMEOUT', 900); // 15 minutes
 
-// Pagination settings
-define('DEFAULT_ITEMS_PER_PAGE', 10);
-define('MAX_ITEMS_PER_PAGE', 50);
+// Error reporting (disable in production)
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
 
-// Cache settings
-define('CACHE_ENABLED', true);
-define('CACHE_LIFETIME', 3600); // 1 hour
-
-// Module positions
-define('MODULE_POSITIONS', [
-    'top-module-1' => 'Top Module 1',
-    'top-module-2' => 'Top Module 2', 
-    'top-module-3' => 'Top Module 3',
-    'top-module-4' => 'Top Module 4',
-    'bottom-module-1' => 'Bottom Module 1',
-    'bottom-module-2' => 'Bottom Module 2',
-    'bottom-module-3' => 'Bottom Module 3', 
-    'bottom-module-4' => 'Bottom Module 4',
-    'footer-module-1' => 'Footer Module 1',
-    'footer-module-2' => 'Footer Module 2',
-    'footer-module-3' => 'Footer Module 3',
-    'footer-module-4' => 'Footer Module 4'
-]);
-
-// Module types
-define('MODULE_TYPES', [
-    'rich_text' => 'Rich Text',
-    'custom_html' => 'Custom HTML',
-    'image' => 'Image',
-    'menu' => 'Menu'
-]);
-
-// Default theme colors
-define('DEFAULT_THEME', [
-    'full_bg_color' => '#1a269b',
-    'h1_color' => '#ffcc3f',
-    'h2_color' => '#ffcc3f', 
-    'h3_color' => '#ffffff',
-    'h4_color' => '#ffffff',
-    'h5_color' => '#ffffff',
-    'links_color' => '#0066cc',
-    'footer_bg_color' => '#000000'
-]);
-
-// Email configuration
-define('MAIL_FROM_NAME', 'CMS System');
-define('MAIL_FROM_EMAIL', 'noreply@yoursite.com');
-
-// Create required directories if they don't exist
-$requiredDirs = [
-    UPLOADS_PATH,
-    UPLOAD_IMAGES_PATH, 
-    UPLOAD_THUMBNAILS_PATH,
-    LOGS_PATH
-];
-
-foreach ($requiredDirs as $dir) {
-    if (!is_dir($dir)) {
-        mkdir($dir, 0755, true);
+/**
+ * Database Connection Class
+ */
+class DB {
+    private static $instance = null;
+    private $pdo;
+    
+    private function __construct() {
+        global $dbConfig;
+        
+        $dsn = "mysql:host={$dbConfig['host']};dbname={$dbConfig['dbname']};charset=utf8mb4";
+        $options = [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES => false,
+        ];
+        
+        try {
+            $this->pdo = new PDO($dsn, $dbConfig['username'], $dbConfig['password'], $options);
+        } catch (PDOException $e) {
+            throw new Exception("Database connection failed: " . $e->getMessage());
+        }
+    }
+    
+    public static function getInstance() {
+        if (self::$instance === null) {
+            self::$instance = new self();
+        }
+        return self::$instance->pdo;
     }
 }
 
-// Autoload function for classes
-spl_autoload_register(function ($className) {
-    $possiblePaths = [
-        INCLUDES_PATH . '/classes/' . $className . '.php',
-        INCLUDES_PATH . '/' . $className . '.php',
-        CONFIG_PATH . '/' . $className . '.php'
-    ];
-    
-    foreach ($possiblePaths as $path) {
-        if (file_exists($path)) {
-            require_once $path;
-            break;
+/**
+ * Secure Session Management
+ */
+class SecureSession {
+    public static function start() {
+        if (session_status() === PHP_SESSION_NONE) {
+            ini_set('session.cookie_httponly', 1);
+            ini_set('session.cookie_secure', isset($_SERVER['HTTPS']));
+            ini_set('session.use_strict_mode', 1);
+            session_start();
         }
+        
+        // Regenerate session ID periodically
+        if (!isset($_SESSION['last_regeneration'])) {
+            session_regenerate_id(true);
+            $_SESSION['last_regeneration'] = time();
+        } elseif (time() - $_SESSION['last_regeneration'] > 300) { // 5 minutes
+            session_regenerate_id(true);
+            $_SESSION['last_regeneration'] = time();
+        }
+        
+        // Check session timeout
+        if (isset($_SESSION['last_activity']) && 
+            (time() - $_SESSION['last_activity']) > SESSION_TIMEOUT) {
+            self::destroy();
+            return false;
+        }
+        $_SESSION['last_activity'] = time();
+        
+        return true;
     }
-});
+    
+    public static function isLoggedIn() {
+        return isset($_SESSION['user_id']) && isset($_SESSION['username']);
+    }
+    
+    public static function getUserId() {
+        return $_SESSION['user_id'] ?? null;
+    }
+    
+    public static function getUsername() {
+        return $_SESSION['username'] ?? null;
+    }
+    
+    public static function login($userId, $username) {
+        session_regenerate_id(true);
+        $_SESSION['user_id'] = $userId;
+        $_SESSION['username'] = $username;
+        $_SESSION['last_activity'] = time();
+        $_SESSION['last_regeneration'] = time();
+    }
+    
+    public static function destroy() {
+        $_SESSION = array();
+        if (ini_get("session.use_cookies")) {
+            $params = session_get_cookie_params();
+            setcookie(session_name(), '', time() - 42000,
+                $params["path"], $params["domain"],
+                $params["secure"], $params["httponly"]
+            );
+        }
+        session_destroy();
+    }
+}
 
-// Include core files
-require_once CONFIG_PATH . '/database.php';
+/**
+ * CSRF Protection
+ */
+class CSRFProtection {
+    public static function generateToken() {
+        if (!isset($_SESSION['csrf_token'])) {
+            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+        }
+        return $_SESSION['csrf_token'];
+    }
+    
+    public static function validateToken($token) {
+        return isset($_SESSION['csrf_token']) && 
+               hash_equals($_SESSION['csrf_token'], $token);
+    }
+}
+
+/**
+ * Authentication Class
+ */
+class Auth {
+    private $db;
+    
+    public function __construct() {
+        $this->db = DB::getInstance();
+    }
+    
+    public function login($username, $password, $captchaResponse = '') {
+        // Check if account is locked
+        if ($this->isAccountLocked($username)) {
+            throw new Exception("Account temporarily locked due to multiple failed login attempts. Please try again later.");
+        }
+        
+        // Validate CAPTCHA if required
+        if ($this->isCaptchaRequired($username) && !$this->validateCaptcha($captchaResponse)) {
+            throw new Exception("CAPTCHA validation failed. Please try again.");
+        }
+        
+        // Get user from database
+        $user = $this->getUserByUsernameOrEmail($username);
+        
+        if (!$user || !password_verify($password, $user['password'])) {
+            $this->recordFailedAttempt($username);
+            throw new Exception("Invalid username/email or password.");
+        }
+        
+        if ($user['status'] !== 'active') {
+            throw new Exception("Account is inactive. Please contact administrator.");
+        }
+        
+        // Successful login
+        $this->clearFailedAttempts($username);
+        $this->updateLastLogin($user['id']);
+        SecureSession::login($user['id'], $user['username']);
+        
+        return true;
+    }
+    
+    private function getUserByUsernameOrEmail($identifier) {
+        $stmt = $this->db->prepare("
+            SELECT id, username, email, password, status 
+            FROM users 
+            WHERE (username = ? OR email = ?) AND status = 'active'
+            LIMIT 1
+        ");
+        $stmt->execute([$identifier, $identifier]);
+        return $stmt->fetch();
+    }
+    
+    private function isAccountLocked($username) {
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*) as attempts
+            FROM login_attempts 
+            WHERE username = ? AND attempt_time > DATE_SUB(NOW(), INTERVAL ? SECOND)
+        ");
+        $stmt->execute([$username, LOCKOUT_DURATION]);
+        $result = $stmt->fetch();
+        
+        return $result['attempts'] >= MAX_LOGIN_ATTEMPTS;
+    }
+    
+    private function isCaptchaRequired($username) {
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*) as attempts
+            FROM login_attempts 
+            WHERE username = ? AND attempt_time > DATE_SUB(NOW(), INTERVAL 1 HOUR)
+        ");
+        $stmt->execute([$username]);
+        $result = $stmt->fetch();
+        
+        return $result['attempts'] >= 2;
+    }
+    
+    private function validateCaptcha($response) {
+        if (empty($response)) {
+            return false;
+        }
+        
+        // Get CAPTCHA secret from security settings
+        $stmt = $this->db->prepare("SELECT captcha_secret_key FROM security_settings LIMIT 1");
+        $stmt->execute();
+        $settings = $stmt->fetch();
+        
+        if (!$settings || empty($settings['captcha_secret_key'])) {
+            return true; // Skip validation if not configured
+        }
+        
+        $data = [
+            'secret' => $settings['captcha_secret_key'],
+            'response' => $response,
+            'remoteip' => $_SERVER['REMOTE_ADDR'] ?? ''
+        ];
+        
+        $verify = curl_init();
+        curl_setopt($verify, CURLOPT_URL, "https://www.google.com/recaptcha/api/siteverify");
+        curl_setopt($verify, CURLOPT_POST, true);
+        curl_setopt($verify, CURLOPT_POSTFIELDS, http_build_query($data));
+        curl_setopt($verify, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($verify, CURLOPT_TIMEOUT, 10);
+        
+        $response = curl_exec($verify);
+        curl_close($verify);
+        
+        if ($response === false) {
+            return false;
+        }
+        
+        $result = json_decode($response, true);
+        return isset($result['success']) && $result['success'] === true;
+    }
+    
+    private function recordFailedAttempt($username) {
+        $stmt = $this->db->prepare("
+            INSERT INTO login_attempts (username, ip_address, attempt_time) 
+            VALUES (?, ?, NOW())
+        ");
+        $stmt->execute([$username, $_SERVER['REMOTE_ADDR'] ?? '']);
+    }
+    
+    private function clearFailedAttempts($username) {
+        $stmt = $this->db->prepare("DELETE FROM login_attempts WHERE username = ?");
+        $stmt->execute([$username]);
+    }
+    
+    private function updateLastLogin($userId) {
+        $stmt = $this->db->prepare("UPDATE users SET last_login = NOW() WHERE id = ?");
+        $stmt->execute([$userId]);
+    }
+}
 
 /**
  * Utility Functions
  */
 
-/**
- * Redirect with message
- */
+// Escape HTML output
+function e($string) {
+    return htmlspecialchars($string ?? '', ENT_QUOTES, 'UTF-8');
+}
+
+// Redirect function
 function redirect($url, $message = '', $type = 'info') {
-    SecureSession::start();
     if (!empty($message)) {
         $_SESSION['flash_message'] = $message;
         $_SESSION['flash_type'] = $type;
@@ -144,11 +340,8 @@ function redirect($url, $message = '', $type = 'info') {
     exit;
 }
 
-/**
- * Get and clear flash message
- */
+// Get flash message
 function getFlashMessage() {
-    SecureSession::start();
     if (isset($_SESSION['flash_message'])) {
         $message = $_SESSION['flash_message'];
         $type = $_SESSION['flash_type'] ?? 'info';
@@ -158,141 +351,13 @@ function getFlashMessage() {
     return null;
 }
 
-/**
- * Secure file upload function
- */
-function uploadImage($file, $destination, $maxWidth = null) {
-    try {
-        InputValidator::validateFileUpload($file, ALLOWED_IMAGE_TYPES, MAX_FILE_SIZE);
-        
-        $filename = uniqid() . '_' . basename($file['name']);
-        $filepath = $destination . '/' . $filename;
-        
-        if (!move_uploaded_file($file['tmp_name'], $filepath)) {
-            throw new Exception("Failed to upload file");
-        }
-        
-        // Resize image if maxWidth specified
-        if ($maxWidth) {
-            resizeImage($filepath, $maxWidth);
-        }
-        
-        return $filename;
-        
-    } catch (Exception $e) {
-        ErrorHandler::logError("File upload error: " . $e->getMessage());
-        throw $e;
+// Require authentication for admin pages
+function requireAuth() {
+    SecureSession::start();
+    if (!SecureSession::isLoggedIn()) {
+        redirect(ADMIN_URL . '/login.php', 'Please log in to access this page.', 'error');
     }
 }
 
-/**
- * Resize image maintaining aspect ratio
- */
-function resizeImage($filepath, $maxWidth) {
-    $imageInfo = getimagesize($filepath);
-    $width = $imageInfo[0];
-    $height = $imageInfo[1];
-    $type = $imageInfo[2];
-    
-    if ($width <= $maxWidth) {
-        return; // No resize needed
-    }
-    
-    $newWidth = $maxWidth;
-    $newHeight = ($height * $newWidth) / $width;
-    
-    // Create image resource based on type
-    switch ($type) {
-        case IMAGETYPE_JPEG:
-            $source = imagecreatefromjpeg($filepath);
-            break;
-        default:
-            throw new Exception("Unsupported image type");
-    }
-    
-    // Create new image
-    $destination = imagecreatetruecolor($newWidth, $newHeight);
-    imagecopyresampled($destination, $source, 0, 0, 0, 0, $newWidth, $newHeight, $width, $height);
-    
-    // Save resized image
-    switch ($type) {
-        case IMAGETYPE_JPEG:
-            imagejpeg($destination, $filepath, 85);
-            break;
-    }
-    
-    // Clean up memory
-    imagedestroy($source);
-    imagedestroy($destination);
-}
-
-/**
- * Generate thumbnail
- */
-function generateThumbnail($sourceFile, $destinationPath, $maxWidth = THUMBNAIL_MAX_WIDTH) {
-    $pathInfo = pathinfo($sourceFile);
-    $thumbnailName = $pathInfo['filename'] . '_thumb.' . $pathInfo['extension'];
-    $thumbnailPath = $destinationPath . '/' . $thumbnailName;
-    
-    copy($sourceFile, $thumbnailPath);
-    resizeImage($thumbnailPath, $maxWidth);
-    
-    return $thumbnailName;
-}
-
-/**
- * Cache management functions
- */
-function getCacheKey($key) {
-    return md5($key);
-}
-
-function getCache($key) {
-    if (!CACHE_ENABLED) return false;
-    
-    $cacheFile = LOGS_PATH . '/cache_' . getCacheKey($key) . '.tmp';
-    
-    if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < CACHE_LIFETIME) {
-        return unserialize(file_get_contents($cacheFile));
-    }
-    
-    return false;
-}
-
-function setCache($key, $data) {
-    if (!CACHE_ENABLED) return false;
-    
-    $cacheFile = LOGS_PATH . '/cache_' . getCacheKey($key) . '.tmp';
-    file_put_contents($cacheFile, serialize($data));
-}
-
-function clearCache($pattern = '') {
-    $files = glob(LOGS_PATH . '/cache_' . $pattern . '*.tmp');
-    foreach ($files as $file) {
-        unlink($file);
-    }
-}
-
-/**
- * Format bytes to human readable format
- */
-function formatBytes($size, $precision = 2) {
-    $base = log($size, 1024);
-    $suffixes = array('B', 'KB', 'MB', 'GB', 'TB');
-    return round(pow(1024, $base - floor($base)), $precision) . ' ' . $suffixes[floor($base)];
-}
-
-/**
- * Sanitize output for display
- */
-function e($string) {
-    return htmlspecialchars($string ?? '', ENT_QUOTES, 'UTF-8');
-}
-
-/**
- * Current timestamp for database
- */
-function now() {
-    return date('Y-m-d H:i:s');
-}
-?>
+// Initialize secure session
+SecureSession::start();
