@@ -1,4 +1,37 @@
-case 'delete':
+<?php
+require_once '../config/config.php';
+SecureSession::requireLogin();
+
+$auth = new Auth();
+$currentUser = $auth->getCurrentUser();
+
+// Handle actions
+$action = $_GET['action'] ?? 'list';
+$moduleId = $_GET['id'] ?? null;
+$moduleType = $_GET['type'] ?? null;
+$message = '';
+$messageType = 'info';
+
+// Process form submissions
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    try {
+        // Validate CSRF token
+        if (!CSRFProtection::validateToken($_POST['csrf_token'] ?? '')) {
+            throw new Exception("Invalid request. Please try again.");
+        }
+        
+        switch ($action) {
+            case 'add':
+                $moduleId = createModule($_POST, $_FILES);
+                redirect("modules.php?action=edit&id={$moduleId}", 'Module created successfully!', 'success');
+                break;
+                
+            case 'edit':
+                updateModule($moduleId, $_POST, $_FILES);
+                redirect("modules.php?action=edit&id={$moduleId}", 'Module updated successfully!', 'success');
+                break;
+                
+            case 'delete':
                 deleteModule($moduleId);
                 redirect('modules.php', 'Module deleted successfully!', 'success');
                 break;
@@ -245,7 +278,9 @@ if (!$flashMessage && $message) {
                             <div class="module-fields">
                                 <?php 
                                 $currentType = $moduleType ?? $module['module_type'] ?? '';
-                                include "includes/module_fields_{$currentType}.php";
+                                if (file_exists("includes/module_fields_{$currentType}.php")) {
+                                    include "includes/module_fields_{$currentType}.php";
+                                }
                                 ?>
                             </div>
                             
@@ -961,40 +996,4 @@ function getCategoriesForMenu() {
     $stmt->execute();
     return $stmt->fetchAll();
 }
-?><?php
-require_once '../config/config.php';
-SecureSession::requireLogin();
-
-$auth = new Auth();
-$currentUser = $auth->getCurrentUser();
-
-// Handle actions
-$action = $_GET['action'] ?? 'list';
-$moduleId = $_GET['id'] ?? null;
-$moduleType = $_GET['type'] ?? null;
-$message = '';
-$messageType = 'info';
-
-// Process form submissions
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    try {
-        // Validate CSRF token
-        if (!CSRFProtection::validateToken($_POST['csrf_token'] ?? '')) {
-            throw new Exception("Invalid request. Please try again.");
-        }
-        
-        switch ($action) {
-            case 'add':
-                $moduleId = createModule($_POST, $_FILES);
-                redirect("modules.php?action=edit&id={$moduleId}", 'Module created successfully!', 'success');
-                break;
-                
-            case 'edit':
-                updateModule($moduleId, $_POST, $_FILES);
-                redirect("modules.php?action=edit&id={$moduleId}", 'Module updated successfully!', 'success');
-                break;
-                
-            case 'delete':
-                deleteModule($moduleId);
-                redirect('modules.php', 'Module deleted successfully!', 'success');
-                break;
+?>
